@@ -53,9 +53,16 @@ impl fmt::Display for VerificationError {
 
 
 // Main verification function
-pub async fn verify_pod(pod: MainPod, pk_list: Value) -> Result<bool, VerificationError>{
+pub async fn verify_pod(pod: MainPod, pk_list: Value, password: String) -> Result<bool, VerificationError>{
     let pk_list_pod = pod.get("public_keys").ok_or(VerificationError::InvalidProofFormat)?;
-    if pk_list_pod != pk_list {
+    let pod_password:String = match pod.get("double-blind-message"){
+        Some(body) => match body.typed() {
+            TypedValue::String(s) => s.to_string(),
+            _ => return Err(VerificationError::InvalidProofFormat),
+        },
+        None => return Err(VerificationError::InvalidProofFormat),
+    };
+    if (pk_list_pod != pk_list) || (pod_password != password) {
         return Ok(false);
     }
     match pod.pod.verify(){

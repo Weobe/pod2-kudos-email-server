@@ -92,7 +92,7 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
         Err(err) => return format!("Sorry, could not parse the pod due to {err}."),
     };
 
-    let flag = verify_pod(email.clone(), pb_signals.clone()).await;
+    let flag = verify_pod(email.clone(), pb_signals.clone(), "0xPARC-double-blind".to_string()).await;
     println!("Verified proof here!");
     let message = match parse_pod(email.clone()).await{
         Ok(body) => body,
