@@ -1,168 +1,74 @@
-//! Utility functions for fetching GitHub users' RSA public keys and constructing
-//! the `publicSignals` array expected by the Circom/zk-SNARK circuit. All
-//! helpers are `async` where network or heavy computation is involved and can
-//! therefore be called inside an asynchronous runtime (e.g. Tokio).
-
 use reqwest::get;
-use num_traits::cast::ToPrimitive;
-use num_bigint::BigUint;
-use serde_json::Value;
-use std::{char::MAX, io};
-use anyhow::{anyhow, Result};
-use sha2::{Sha256, Sha512, Digest};
+use anyhow::{anyhow};
 use serde::{Serialize, Deserialize};
+use ssh_key::{public::{PublicKey, KeyData}};
+use std::fs::File;
+use std::io::Write;
+use plonky2::{
+    field::types::Field,
+    hash::{
+        hash_types::{HashOut, HashOutTarget},
+        poseidon::PoseidonHash,
+    },
+    plonk::config::Hasher,
+};
+use pod2::{self,
+    middleware::{
+        VDSet,
+        Params,
+        Value,
+        containers::{Set, Array},
+        RawValue,
+        KEY_SIGNER,
+        PodType, Predicate, Statement,
+        StatementArg, TypedValue, KEY_TYPE, Operation
+    },
+    backends::plonky2::{
+        basetypes::{F},
+    },
+    frontend::MainPod,
+    backends::plonky2::mainpod,
+    timed,
+    op
+};
 
-use base64::decode;
-use std::error::Error;
 
-const BLOCK_SIZE :usize = 35;
 const MAX_GROUP_SIZE : usize = 300;
+const RSA_BYTE_SIZE: usize = 512;
 
-/// Represents the data that will be passed to the circuit as `publicSignals`.
-///
-/// Fields
-/// -------
-/// * `message_hash` – SHA-512 digest of the message split into five 120-bit
-///   limbs.
-/// * `keys` – A collection of **exactly** `MAX_GROUP_SIZE` RSA public keys
-///   (padded if necessary). Each key is itself split into 35 limbs of
-///   120-bit width.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublicSignals{
 
-    message_hash: Vec<u128>,
-    keys: Vec<Vec<u128>>
-    
+pub async fn extract_rsa_from_ssh(ssh_key: &str) -> anyhow::Result<Vec<u8>> {
+    let rsa_public_key : PublicKey = PublicKey::from_openssh(ssh_key)
+        .map_err(|_| anyhow!("Failed to parse SSH key"))?;
+
+    let key_data : KeyData = rsa_public_key.key_data().clone();
+    let pk = match key_data {
+            KeyData::Rsa(pk) => pk,
+            _ => {
+                return Err(anyhow!("signature does not carry an Rsa key"));
+            }
+        };
+    let pk_bytes =
+            pk.n.as_positive_bytes()
+                .expect("Public key was negative")
+                .to_vec();
+    if pk_bytes.len() != RSA_BYTE_SIZE {
+        return Err(anyhow!("Public key was not the correct size"));
+    }
+    Ok(pk_bytes)
 }
 
-impl PublicSignals{
-    pub fn new() -> Self{
-        Self{
-            message_hash: Vec:: new(),
-            keys: Vec::new()
-        }
-    }
-}
-
-/// Converts an arbitrary-sized big-endian integer represented by `array` into a
-/// vector of `num_chunks` limbs where each limb is `num_bits` bits wide. The
-/// limbs are ordered little-endian (least-significant limb first) because this
-/// is the format expected by most Circom gadgets.
-///
-/// Returns an error if the integer does not fit into the provided number of
-/// chunks.
-async fn convert_byte_to_chunks(num_bits: u32, num_chunks: u32, array: Vec<u8>) -> anyhow::Result<Vec<u128>>{
-    let mut big_int : BigUint = BigUint::from_bytes_be(array[..].try_into().unwrap());
-    let mut res : Vec<u128> = Vec::new();
-    for i in 0 .. num_chunks {
-        let curr : u128 = (big_int.clone() % (1u128 << num_bits.clone())).to_u128().unwrap();
-        res.push(curr);
-        big_int = big_int >> num_bits.clone();
-    }
-    // make sure that num_chunks is enough to cover the whole number
-    if big_int != BigUint::from(0u32) {
-        return Err(anyhow!(
-            "Cannot convert number: value does not fit into {} chunks of {} bits",
-            num_chunks,
-            num_bits
-        ));
-    }
-    Ok(res)
-}
-
-/// Parses an SSH-formatted RSA public key (the `ssh-rsa AAAAB3...` string) and
-/// extracts the modulus `n` and exponent `e` in raw big-endian byte form.
-///
-/// The function performs basic validation on the key structure and returns
-/// detailed errors when the format is unexpected.
-pub async fn extract_rsa_from_ssh(ssh_key: &str) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    let parts: Vec<&str> = ssh_key.trim().split_whitespace().collect();
-    if parts.len() < 2 {
-        return Err(anyhow!("Invalid SSH key format: should include key type"));
-    }
-
-    // Validate key type
-    if !parts[0].starts_with("ssh-rsa") {
-        return Err(anyhow!("Unsupported key type: {}", parts[0]));
-    }
-    let key_data = decode(parts[1])?;
-    let mut offset = 0;
-
-    // Helper function to read a u32 length-prefixed field
-    async fn read_length(data: &[u8], offset: &mut usize) -> anyhow::Result<usize> {
-        if *offset + 4 > data.len() {
-            return Err(anyhow!("Unexpected end of data when reading length"));
-        }
-        let len = u32::from_be_bytes(data[*offset..*offset + 4].try_into()?) as usize;
-        *offset += 4;
-        
-        // Validate length is reasonable
-        if len > data.len() - *offset {
-            return Err(anyhow!("Invalid length {}: exceeds remaining data", len));
-        }
-        if len == 0 {
-            return Err(anyhow!("Invalid length: zero length field"));
-        }
-        
-        Ok(len)
-    }
-
-    // Skip key type
-    let key_type_len = read_length(&key_data, &mut offset).await?;
-    
-    // Validate key type string
-    if key_type_len > key_data.len() - offset {
-        return Err(anyhow!("Key type length exceeds data length"));
-    }
-    let key_type = String::from_utf8_lossy(&key_data[offset..offset + key_type_len]);
-    if key_type != "ssh-rsa" {
-        return Err(anyhow!("Invalid key type in data: {}", key_type));
-    }
-    offset += key_type_len;
-
-    // Read e (exponent)
-    let e_len = read_length(&key_data, &mut offset).await?;
-    if e_len > key_data.len() - offset {
-        return Err(anyhow!("Exponent length exceeds data length"));
-    }
-    let e = key_data[offset..offset + e_len].to_vec();
-    offset += e_len;
-
-    // Read n (modulus)
-    let n_len = read_length(&key_data, &mut offset).await?;
-    if n_len > key_data.len() - offset {
-        return Err(anyhow!("Modulus length exceeds data length"));
-    }
-    let mut n = key_data[offset..offset + n_len].to_vec();
-    
-    // Remove leading zero if present (SSH sometimes encodes n with a leading 0)
-    if !n.is_empty() && n[0] == 0x00 {
-        n = n[1..].to_vec();
-    }
-
-    // Validate that we've consumed all data
-    if offset + n_len != key_data.len() {
-        return Err(anyhow!("Extra data after modulus"));
-    }
-
-    Ok((n, e))
-}
-
-/// Splits the body returned by GitHub's `https://github.com/<user>.keys` API
-/// into individual *RSA* keys (other key types are ignored).
-pub async fn parce_keys(all_data: &str) -> anyhow::Result<Vec<String>>{
-    let mut key_list: Vec<&str> = all_data.trim().split("ssh-").collect();
+pub async fn parse_keys(all_data: &str) -> anyhow::Result<Vec<String>>{
+    let key_list: Vec<&str> = all_data.trim().split("ssh-").collect();
     let mut result : Vec<String> = Vec::new();
     for key in key_list{
         if key != ""{
-            let mut parts: Vec<&str> = key.trim().split_whitespace().collect();
+            let parts: Vec<&str> = key.trim().split_whitespace().collect();
             if parts.len() < 2 {
-                return Err(anyhow!(
-                    "Unable to parse GitHub SSH keys: unexpected formatting detected"
-                ));
+                return Err(anyhow!("Could not read the github keys. Check the formating."));
             }
             if parts[0].starts_with("rsa") {
-                let mut key = "ssh-rsa ".to_owned() + parts[1] + "\n";
+                let key = "ssh-rsa ".to_owned() + parts[1] + "\n";
                 result.push(key.to_string());
             }
         }
@@ -170,108 +76,96 @@ pub async fn parce_keys(all_data: &str) -> anyhow::Result<Vec<String>>{
     Ok(result)
 }
 
-/// Downloads all RSA public keys of a GitHub user, extracts their moduli and
-/// converts them into 120-bit limb representation suitable for the circuit.
-pub async fn get_and_process_username(username : String) -> anyhow::Result<Vec<Vec<u128>>> {
+pub async fn get_and_process_username(username : String) -> anyhow::Result<Vec<Vec<u8>>> {
     let address = format!("{}{}{}", "https://github.com/", username, ".keys");
-    let mut result : Vec<Vec<u128>> = Vec::new();
+    let mut result : Vec<Vec<u8>> = Vec::new();
+    println!("{}", address);
     match get(&address).await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.text().await {
                     Ok(body) => {
-                        let mut list_keys = parce_keys(&body).await?;
+                        let list_keys = parse_keys(&body).await?;
                         for key in list_keys{
                             let extracted_key = extract_rsa_from_ssh(&key).await?;
-                            let mut convert = match convert_byte_to_chunks(120, 35, extracted_key.0).await {
-                                Ok(body) => body ,
-                                Err(err) => {
-                                    return Err(anyhow!(
-                                        "Failed to convert key chunks for user '{}': {}",
-                                        username,
-                                        err
-                                    ))
-                                },
-                            };
-
-                            result.push(convert);
+                            result.push(extracted_key);
                         }
                         return Ok(result);
                     },
                     Err(err) =>{
-                        return Err(anyhow!(
-                            "Error while downloading keys for user '{}': {}",
-                            username,
-                            err
-                        ));
+                        return Err(anyhow!("Error {err} reading the keys of {username}. Check the username again."));
                     }
                 }
             } else {
-                return Err(anyhow!(
-                    "GitHub returned a non-success status code for user '{}'",
-                    username
-                ));
+                return Err(anyhow!("Request failed. Check Internet connection."));
             }
 
         }
         Err(err) => {
-            return Err(anyhow!("HTTP request error: {}", err));
+            return Err(anyhow!("Request error: {err}"));
         }
     }
 }
 
-/// High-level helper that, given a list of GitHub usernames and a plain-text
-/// `message`, constructs a fully-populated `PublicSignals` instance ready for
-/// proof generation.
-pub async fn create_pb_signals_struct(list_usernames: Vec<String>, message: &str) -> anyhow::Result<PublicSignals>{
-    let mut hasher = Sha512::new();
-    hasher.update(message.as_bytes());
-    let mut message_hash = match convert_byte_to_chunks(120, 5, hasher.finalize().to_vec()).await{
-        Ok(body) => body,
-        Err(_err) => return Err(anyhow!("Error processing message. Please ensure that message is a string of ASCII characters.")),
-    };
-    let mut result = PublicSignals::new();
-    result.message_hash = message_hash;
+pub async fn get_all_users(list_usernames: Vec<String>) -> anyhow::Result<Vec<Vec<u8>>> {
+    let mut result: Vec<Vec<u8>> = Vec::new();
     let mut sorted_usernames: Vec<String> = list_usernames.clone();
     sorted_usernames.sort();
     for username in sorted_usernames{
-        let keys = get_and_process_username(username.clone()).await?;
-        for key in keys{
-            result.keys.push(key);
-        }
+        match get_and_process_username(username.clone()).await {
+            Ok(keys) => {
+                println!("username {username:?} is processed");
+                for key in keys{
+                    result.push(key);
+                }
+            },
+            Err(_) => {
+                return Err(anyhow!("Failed to process username {:?}, please check spelling", username));
+            }
+        };
     }
-    if result.keys.len() > MAX_GROUP_SIZE {
-        return Err(anyhow!(
-            "Too many keys in the group: maximum allowed is {}",
-            MAX_GROUP_SIZE
-        ));
-    }  
-    while (result.keys.len() < MAX_GROUP_SIZE){
-        result.keys.push(result.keys[0].clone());
+    if result.len() > MAX_GROUP_SIZE {
+        return Err(anyhow!("Too many keys in the group. Maximum is {MAX_GROUP_SIZE}."));
     }
+    let mut file = File::create("group_keys.txt")
+        .map_err(|e| anyhow!("Failed to create file: {e}"))?;
+    file.write(format!("{result:?}").as_bytes())
+        .map_err(|e| anyhow!("Failed to write to file: {e}"))?;
     return Ok(result);
 }
 
-/// Flattens the nested `PublicSignals` structure into a single `Vec<String>` so
-/// that it can be passed directly to snarkJS or a Circom verifier.
-pub async fn convert_publicSignals(pb_signals: PublicSignals) -> Vec<String>{
-    let mut result : Vec<String> = Vec::new();
-    for block in pb_signals.message_hash{
-        result.push(block.to_string());
-    }
-    
-    for key in pb_signals.keys{
-        for block in key{
-            result.push(block.to_string());
+
+
+pub async fn get_set_of_all_users(group_pod: MainPod) -> anyhow::Result<(Vec<String>, Value)> {
+    let usernames_array: Option<Array> = match group_pod.get("usernames").expect("Pod doesn't have usernames field").typed(){
+        TypedValue::Array(arr) => {
+            Some(arr.clone())
+        },
+        _ => {
+            None
         }
-    } 
-    result
-}
+    };
+    let binding = usernames_array.ok_or(anyhow!("Incorrect pod. Does not consists list of usernames."))?;
+    let option_usernames: Vec<Option<String>> = binding.array().into_iter().map(|value| match value.typed() {
+        TypedValue::String(s) => {
+            Some(s.clone())
+        },
+        _ => {
+            None
+        }
+    }).collect();
+    let usernames: Vec<String> = option_usernames.into_iter().map(|opt| opt.unwrap()).collect();
 
-/// Convenience wrapper that combines `create_pb_signals_struct` and
-/// `convert_publicSignals` in one call.
-pub async fn create_pb_signals(list_usernames: Vec<String>, message: &str) -> anyhow::Result<Vec<String>>{
-    Ok(convert_publicSignals(create_pb_signals_struct(list_usernames, message).await?).await)
+    let pub_keys = get_all_users(usernames.clone()).await?;
+    let mut list_of_signers : Vec<Value> = Vec::new();
+    for pub_key in pub_keys{
+        let pk_fields: Vec<F> = pub_key[..].iter().map(|&b| F::from_canonical_u8(b)).collect();
+        let pk_hash = PoseidonHash::hash_no_pad(&pk_fields);
+        let signer = Value::from(RawValue(pk_hash.elements));
+        list_of_signers.push(signer);
+    }
+    let set_username = Value::from(Set::new(group_pod.params.max_depth_mt_containers,
+        list_of_signers.into_iter().map(Value::from).collect(),)?);
+    Ok((usernames, set_username))
 }
-
 

@@ -19,3 +19,6 @@ tokio = { version = "1", features = ["full"] }
 ark-ec      = "0.5"   # ← new
 anyhow      = "1"     # ← new
 panic = "0.4.0"
+pod2 = { git="https://github.com/0xPARC/pod2", branch = "feat/sync-send", features = ["time"]}
+plonky2 = { git = "https://github.com/0xPolygonZero/plonky2"}
+fetch_data_lib = {path = "../fetch_data_lib"}

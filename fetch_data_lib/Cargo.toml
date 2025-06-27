@@ -13,3 +13,6 @@ serde = { version = "1.0", features = ["derive"] }
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 anyhow = "1.0.98"
+pod2 = { git="https://github.com/0xPARC/pod2", branch = "feat/sync-send", features = ["time"]}
+plonky2 = { git = "https://github.com/0xPolygonZero/plonky2"}
+ssh-key = "0.6.7"
