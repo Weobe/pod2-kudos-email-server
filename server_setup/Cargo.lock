@@ -3508,6 +3508,7 @@ dependencies = [
  "ark-snark",
  "axum 0.8.4",
  "fetch_data_lib",
+ "hex",
  "lettre",
  "num-bigint",
  "panic",

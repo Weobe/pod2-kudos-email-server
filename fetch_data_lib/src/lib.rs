@@ -79,7 +79,6 @@ pub async fn parse_keys(all_data: &str) -> anyhow::Result<Vec<String>>{
 pub async fn get_and_process_username(username : String) -> anyhow::Result<Vec<Vec<u8>>> {
     let address = format!("{}{}{}", "https://github.com/", username, ".keys");
     let mut result : Vec<Vec<u8>> = Vec::new();
-    println!("{}", address);
     match get(&address).await {
         Ok(response) => {
             if response.status().is_success() {
@@ -114,7 +113,6 @@ pub async fn get_all_users(list_usernames: Vec<String>) -> anyhow::Result<Vec<Ve
     for username in sorted_usernames{
         match get_and_process_username(username.clone()).await {
             Ok(keys) => {
-                println!("username {username:?} is processed");
                 for key in keys{
                     result.push(key);
                 }

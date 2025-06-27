@@ -1,7 +1,7 @@
 use tokio::net::TcpListener;
 use serde_json::Value as JValue;
 use std::fmt;
-
+use hex::FromHex;
 use pod2::{self,
     middleware::{
         VDSet,
@@ -55,14 +55,17 @@ impl fmt::Display for VerificationError {
 // Main verification function
 pub async fn verify_pod(pod: MainPod, pk_list: Value, password: String) -> Result<bool, VerificationError>{
     let pk_list_pod = pod.get("public_keys").ok_or(VerificationError::InvalidProofFormat)?;
-    let pod_password:String = match pod.get("double-blind-message"){
+    let pod_password:String = match pod.get("original_msg"){
         Some(body) => match body.typed() {
             TypedValue::String(s) => s.to_string(),
             _ => return Err(VerificationError::InvalidProofFormat),
         },
         None => return Err(VerificationError::InvalidProofFormat),
     };
-    if (pk_list_pod != pk_list) || (pod_password != password) {
+    let pod_password:Value = pod.get("sgn_message").ok_or(VerificationError::InvalidProofFormat)?;
+    //let temp_password = Value::from(RawValue::from(Hash::from_hex("399068ff6d81ce4d396d45293d7562430067863a198f00730da29f02612aeebb").ok_or(VerificationError::InvalidProofFormat)?));
+    //println!("We got: {pod_password:?}, \n expected: {temp_password:?}");
+    if (pk_list_pod != pk_list) || (pod_password != pod_password) {
         return Ok(false);
     }
     match pod.pod.verify(){

@@ -83,7 +83,6 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
         Ok(body) => body,
         Err(err) => return format!("Sorry, could not parse the pod due to {err}."),
     };
-    println!("Here, got pod!");
     let date: String= Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let to_addr = "sansome-talk@0xparc.org";
     let subject   = "Kudos!";      // or borrow &email.header
@@ -93,20 +92,16 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
     };
 
     let flag = verify_pod(email.clone(), pb_signals.clone(), "0xPARC-double-blind".to_string()).await;
-    println!("Verified proof here!");
     let message = match parse_pod(email.clone()).await{
         Ok(body) => body,
         Err(err) => return format!("{err}"),
     };
-    println!("Got the message here!");
     let email_database = Email{to:Some("sansome-talk@0xparc.org".to_string()), header: "Kudos!".into(), message: message.clone(), senders: list_of_senders.clone(), group_signature: email_str.clone(), date: date.clone()};
     let mut text = create_the_message(list_of_senders.clone(), message.clone()).await;
-    println!("Got text: \n {text}");
     match flag {
         Ok(body) => { 
             if body {
                 let email_id = insert_email_to_database(&database_conn.lock().unwrap(), &email_database).unwrap();
-                println!("Sending message now...");
                 let letter = Message::builder()
                                     .from("kudos@0xparc.org".parse().unwrap())
                                     .to(to_addr.parse().unwrap())
@@ -114,12 +109,11 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
                                     .header(header::ContentType::TEXT_PLAIN)
                                     .body(text + &format!("\n \n Date: {} \n Email id: {} \n \n Group Signature: {} \n(Trust us)", date, email_id, email_str.clone()))
                                     .unwrap();
-                                    
-                println!("Created the message...");
                 let creds = Credentials::new("kudos@0xparc.org".into(), "szmi aljp ugko evld".into());
                 let mailer = SmtpTransport::relay("smtp.gmail.com").unwrap().credentials(creds).build();
                 match mailer.send(&letter){
                     Ok(response) => {
+                        println!("Email sent!");
                         return format!("Email sent! Server said: {:?}", response); },
                     Err(e) => {
                         return format!("Failed to send email: {:#?}", e);
