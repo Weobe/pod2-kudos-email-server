@@ -23,3 +23,5 @@ pod2 = { git="https://github.com/0xPARC/pod2", branch = "feat/sync-send", featur
 plonky2 = { git = "https://github.com/0xPolygonZero/plonky2"}
 fetch_data_lib = {path = "../fetch_data_lib"}
 hex = "0.4.3"
+ssh-key = { version = "0.6.7" , features = ["serde"]} 
+sha2 = "0.10.9"

@@ -2757,6 +2757,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rsa",
  "sec1",
+ "serde",
  "sha2",
  "signature",
  "ssh-cipher",
@@ -3289,6 +3290,8 @@ dependencies = [
  "rand 0.9.1",
  "serde",
  "serde_json",
+ "sha2",
+ "ssh-key",
  "tokio",
 ]
 
