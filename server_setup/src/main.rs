@@ -137,7 +137,7 @@ async fn main() {
                     .route("/", post(receive_email))
                     .with_state(database);
 
-    let addr = SocketAddr::from(([127,0,0,1], 8000));
+    let addr = : SocketAddr = "0.0.0.0:8080".parse().expect("Invalid Address");
     let tcp = TcpListener::bind(&addr).await.unwrap();
 
     axum::serve(tcp, router).await.unwrap();
