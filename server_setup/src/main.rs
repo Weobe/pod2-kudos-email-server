@@ -4,7 +4,7 @@ use anyhow::{anyhow};
 use std::{sync::{Arc, Mutex}, net::SocketAddr};
 use serde_json;
 use tokio::net::TcpListener;
-use lettre::message::{header, Message};
+use lettre::message::{header, Message, SinglePart, MultiPart, header::ContentType, Attachment};
 use lettre::{SmtpTransport, Transport, transport::smtp::authentication::Credentials};
 use rusqlite::{params, Connection, Result};
 use fetch_data_lib :: {get_set_of_all_users};
@@ -85,7 +85,7 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
     };
     let date: String= Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let to_addr = "sansome-talk@0xparc.org";
-    let subject   = "Kudos!";      // or borrow &email.header
+    let subject   = "Kudos!";  
     let (list_of_senders, pb_signals) = match get_set_of_all_users(email.clone()).await {
         Ok(body) => body,
         Err(err) => return format!("Sorry, could not parse the pod due to {err}."),
@@ -105,8 +105,10 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
                                     .from("kudos@0xparc.org".parse().unwrap())
                                     .to(to_addr.parse().unwrap())
                                     .subject(subject)
-                                    .header(header::ContentType::TEXT_PLAIN)
-                                    .body(text + &format!("\n \n Date: {} \n Email id: {} \n \n Group Signature: {} \n(Trust us)", date, email_id, email_str.clone()))
+                                    .multipart( MultiPart::mixed()
+                                        .singlepart(SinglePart::plain(text + &format!("\n \n Date: {} \n Email id: {} :)", date, email_id)))
+                                        .singlepart(Attachment::new("group_signature.txt".to_string())
+                                                .body(email_str.clone().into_bytes(), ContentType::TEXT_PLAIN)))
                                     .unwrap();
                 let creds = Credentials::new("kudos@0xparc.org".into(), "szmi aljp ugko evld".into());
                 let mailer = SmtpTransport::relay("smtp.gmail.com").unwrap().credentials(creds).build();
@@ -137,7 +139,7 @@ async fn main() {
                     .route("/", post(receive_email))
                     .with_state(database);
 
-    let addr = : SocketAddr = "0.0.0.0:8080".parse().expect("Invalid Address");
+    let addr : SocketAddr = "0.0.0.0:8080".parse().expect("Invalid Address");
     let tcp = TcpListener::bind(&addr).await.unwrap();
 
     axum::serve(tcp, router).await.unwrap();
