@@ -111,8 +111,9 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
                                                 .body(email_str.clone().into_bytes(), ContentType::TEXT_PLAIN)))
                                     .unwrap();
                 dotenvy::dotenv().ok();
+                let kudos_username  = std::env::var("KUDOS_EMAIL_ADDRESS").expect("Kudos email not set");
                 let kudos_password = std::env::var("KUDOS_PASSWORD").expect("Kudos password not set");
-                let creds = Credentials::new("kudos@0xparc.org".into(), kudos_password.into());
+                let creds = Credentials::new(kudos_username.into(), kudos_password.into());
                 let mailer = SmtpTransport::relay("smtp.gmail.com").unwrap().credentials(creds).build();
                 match mailer.send(&letter){
                     Ok(response) => {
