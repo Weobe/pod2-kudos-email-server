@@ -2,7 +2,7 @@
 web server to send group emails :)
 The server needs to have Rust installed. 
 
-To set the webserver for your company, create the gmail account (something like kudos@company_name.ord) and then add it to the server_setup\.env file. 
+To set the webserver for your company, create the gmail account (something like kudos@company_name.org) and then add it to the server_setup\.env file. 
 
 Go to the https://myaccount.google.com/apppasswords website to set an app password for this Gmail account. Set KUDOS_PASSWORD in server_setup\.env file to be this app's password.
 
