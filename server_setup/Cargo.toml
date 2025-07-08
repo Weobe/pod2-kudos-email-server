@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dotenvy = "0.15"
 axum = { version = "0.7", features = ["macros"] }
 lettre = { version = "0.10", features = ["smtp-transport", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -110,7 +110,9 @@ async fn receive_email(State(database_conn): State<EmailDatabase>, email_str : S
                                         .singlepart(Attachment::new("group_signature.txt".to_string())
                                                 .body(email_str.clone().into_bytes(), ContentType::TEXT_PLAIN)))
                                     .unwrap();
-                let creds = Credentials::new("kudos@0xparc.org".into(), "szmi aljp ugko evld".into());
+                dotenvy::dotenv().ok();
+                let kudos_password = std::env::var("KUDOS_PASSWORD").expect("Kudos password not set");
+                let creds = Credentials::new("kudos@0xparc.org".into(), kudos_password.into());
                 let mailer = SmtpTransport::relay("smtp.gmail.com").unwrap().credentials(creds).build();
                 match mailer.send(&letter){
                     Ok(response) => {
